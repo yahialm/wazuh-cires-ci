@@ -1,14 +1,50 @@
 name: Wazuh Docker Swarm Deployment
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
 jobs:
+  security-scan:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        image:
+          - wazuh/wazuh-manager:4.12.0
+          - wazuh/wazuh-indexer:4.12.0
+          - wazuh/wazuh-dashboard:4.12.0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          format: 'sarif'
+          output: 'trivy-results-${{ strategy.job-index }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail on critical/high vulnerabilities
+          timeout: '5m'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ strategy.job-index }}.sarif'
+
   validate-config:
     runs-on: self-hosted
     timeout-minutes: 5
+    needs: security-scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,88 +69,145 @@ jobs:
               echo "✅ Found: $file"
             fi
           done
+          
+          echo "All configuration files present"
+
+      - name: Validate Docker Compose syntax
+        run: |
+          docker-compose -f wazuh-swarm.yaml config > /dev/null
+          echo "Docker Compose file syntax is valid"
 
   deploy:
     runs-on: self-hosted
     timeout-minutes: 20
-    needs: validate-config
-    if: github.ref == 'refs/heads/main'
+    needs: [security-scan, validate-config]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # If runner is ON the swarm manager, deploy directly
-      - name: Deploy to Docker Swarm (Local)
-        if: ${{ env.DEPLOY_LOCAL == 'true' }}
+      - name: Set up Python
         run: |
-          cd /opt/wazuh
-          
-          # Copy files locally
-          cp -r $GITHUB_WORKSPACE/config/* ./config/
-          cp $GITHUB_WORKSPACE/wazuh-swarm.yaml ./
-          cp $GITHUB_WORKSPACE/setup-secrets.sh ./
-          
-          # Generate certificates
-          echo "Generating certificates..."
-          docker run --rm -v $(pwd)/config:/config --network host wazuh/wazuh-certs-generator:0.0.2
-          
-          # Setup secrets
-          echo "Setting up secrets..."
-          chmod +x setup-secrets.sh
-          ./setup-secrets.sh
-          
-          # Deploy stack
-          echo "Removing old stack..."
-          docker stack rm wazuh || true
-          sleep 15
-          
-          echo "Deploying new stack..."
-          docker stack deploy -c wazuh-swarm.yaml wazuh
-          
-          # Wait for services
-          echo "Waiting for services..."
-          timeout 300 bash -c 'while [[ "$(docker service ls --filter name=wazuh --format "{{.REPLICAS}}" | grep -c "0/")" -gt 0 ]]; do sleep 10; echo "Still waiting..."; done'
-          
-          echo "✅ Deployment completed!"
-          docker service ls --filter name=wazuh
+          # Check if python3 is available, install if not
+          if ! command -v python3 &> /dev/null; then
+            sudo apt update
+            sudo apt install -y python3 python3-pip
+          fi
 
-      # If runner is NOT on swarm manager, deploy via SSH
-      - name: Deploy to Docker Swarm (Remote)
-        if: ${{ env.DEPLOY_LOCAL != 'true' }}
+      - name: Install Ansible
         run: |
-          # Setup SSH (only needed if runner is separate from swarm)
+          pip3 install ansible ansible-core
+          ansible-galaxy collection install community.docker
+
+      - name: Configure SSH
+        run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SWARM_MANAGER_HOST }} >> ~/.ssh/known_hosts
-          
-          # Copy files to swarm manager
-          scp -r config/ ${{ secrets.SWARM_MANAGER_USER }}@${{ secrets.SWARM_MANAGER_HOST }}:/opt/wazuh/
-          scp wazuh-swarm.yaml ${{ secrets.SWARM_MANAGER_USER }}@${{ secrets.SWARM_MANAGER_HOST }}:/opt/wazuh/
-          scp setup-secrets.sh ${{ secrets.SWARM_MANAGER_USER }}@${{ secrets.SWARM_MANAGER_HOST }}:/opt/wazuh/
-          
-          # Deploy via SSH
-          ssh ${{ secrets.SWARM_MANAGER_USER }}@${{ secrets.SWARM_MANAGER_HOST }} << 'EOF'
-          cd /opt/wazuh
-          
-          # Generate certificates
-          docker run --rm -v $(pwd)/config:/config --network host wazuh/wazuh-certs-generator:0.0.2
-          
-          # Setup secrets
-          chmod +x setup-secrets.sh
-          ./setup-secrets.sh
-          
-          # Deploy stack
-          docker stack rm wazuh || true
-          sleep 15
-          docker stack deploy -c wazuh-swarm.yaml wazuh
-          
-          # Wait for services
-          timeout 300 bash -c 'while [[ "$(docker service ls --filter name=wazuh --format "{{.REPLICAS}}" | grep -c "0/")" -gt 0 ]]; do sleep 10; echo "Still waiting..."; done'
-          
-          echo "✅ Deployment completed!"
-          docker service ls --filter name=wazuh
+
+      - name: Deploy with Ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          cat > inventory.yml << 'EOF'
+          all:
+            hosts:
+              swarm-manager:
+                ansible_host: ${{ secrets.SWARM_MANAGER_HOST }}
+                ansible_user: ${{ secrets.SWARM_MANAGER_USER }}
+                ansible_ssh_private_key_file: ~/.ssh/id_rsa
           EOF
+          
+          cat > deploy-playbook.yml << 'EOF'
+          ---
+          - name: Deploy Wazuh to Docker Swarm
+            hosts: swarm-manager
+            become: yes
+            vars:
+              wazuh_api_password: ${{ secrets.WAZUH_API_PASSWORD }}
+              indexer_password: ${{ secrets.INDEXER_PASSWORD }}
+              
+            tasks:
+              - name: Copy configuration files
+                copy:
+                  src: "{{ item.src }}"
+                  dest: "{{ item.dest }}"
+                  mode: '0644'
+                loop:
+                  - { src: "config/", dest: "/opt/wazuh/" }
+                  - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
+                  - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh" }
+
+              - name: Generate certificates
+                shell: |
+                  cd /opt/wazuh
+                  docker run --rm -v $(pwd)/config:/config \
+                    --network host \
+                    wazuh/wazuh-certs-generator:0.0.2
+
+              - name: Create Docker secrets from certificates
+                shell: |
+                  cd /opt/wazuh
+                  docker secret rm {{ item.name }} || true
+                  docker secret create {{ item.name }} config/wazuh_indexer_ssl_certs/{{ item.file }}
+                loop:
+                  - { name: "root-ca-pem", file: "root-ca.pem" }
+                  - { name: "root-ca-manager-pem", file: "root-ca-manager.pem" }
+                  - { name: "admin-pem", file: "admin.pem" }
+                  - { name: "admin-key", file: "admin-key.pem" }
+                  - { name: "wazuh-indexer-pem", file: "wazuh.indexer.pem" }
+                  - { name: "wazuh-indexer-key", file: "wazuh.indexer-key.pem" }
+                  - { name: "wazuh-manager-pem", file: "wazuh.manager.pem" }
+                  - { name: "wazuh-manager-key", file: "wazuh.manager-key.pem" }
+                  - { name: "wazuh-dashboard-pem", file: "wazuh.dashboard.pem" }
+                  - { name: "wazuh-dashboard-key", file: "wazuh.dashboard-key.pem" }
+
+              - name: Create configuration secrets
+                shell: |
+                  cd /opt/wazuh
+                  docker secret rm {{ item.name }} || true
+                  docker secret create {{ item.name }} {{ item.file }}
+                loop:
+                  - { name: "wazuh-indexer-yml", file: "config/wazuh_indexer/wazuh.indexer.yml" }
+                  - { name: "internal-users-yml", file: "config/wazuh_indexer/internal_users.yml" }
+                  - { name: "opensearch-dashboards-yml", file: "config/wazuh_dashboard/opensearch_dashboards.yml" }
+                  - { name: "wazuh-yml", file: "config/wazuh_dashboard/wazuh.yml" }
+                  - { name: "wazuh-manager-conf", file: "config/wazuh_cluster/wazuh_manager.conf" }
+
+              - name: Deploy Wazuh stack
+                shell: |
+                  cd /opt/wazuh
+                  docker stack rm wazuh || true
+                  sleep 15
+                  docker stack deploy -c wazuh-swarm.yaml wazuh
+
+              - name: Wait for services to be ready
+                shell: docker service ls --filter name=wazuh --format "table {{.NAME}}\t{{.REPLICAS}}"
+                register: service_status
+                until: "'0/' not in service_status.stdout"
+                retries: 30
+                delay: 10
+
+              - name: Initialize indexer security
+                shell: |
+                  sleep 30
+                  docker exec $(docker ps -q -f name=wazuh_wazuh-indexer) \
+                    /usr/share/wazuh-indexer/bin/indexer-security-init.sh || true
+
+              - name: Verify deployment
+                uri:
+                  url: "https://{{ ansible_host }}:443"
+                  method: GET
+                  validate_certs: no
+                  timeout: 30
+                register: dashboard_check
+                retries: 5
+                delay: 10
+          EOF
+          
+          ansible-playbook -i inventory.yml deploy-playbook.yml
 
   notify:
     runs-on: self-hosted
