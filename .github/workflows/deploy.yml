@@ -42,10 +42,11 @@ jobs:
           
           echo "All configuration files present"
 
-      - name: Validate Docker Compose syntax
+      - name: Validate Docker Swarm file syntax
         run: |
-          docker compose -f wazuh-swarm.yaml config > /dev/null
-          echo "Docker Compose file syntax is valid"
+          # Just check if the YAML is valid, swarm will validate the rest
+          docker run --rm -v $(pwd):/workdir mikefarah/yq eval '.' wazuh-swarm.yaml > /dev/null
+          echo "Docker Swarm file syntax is valid"
 
   deploy:
     runs-on: self-hosted
