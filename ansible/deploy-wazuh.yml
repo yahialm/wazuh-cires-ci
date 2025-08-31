@@ -1,0 +1,171 @@
+---
+- name: Deploy Wazuh to Docker Swarm
+  hosts: swarm_managers
+  become: yes
+  gather_facts: yes
+  vars:
+    wazuh_config_dir: /opt/wazuh
+    wazuh_version: "4.12.0"
+    # Using official Wazuh images directly
+    manager_image: "wazuh/wazuh-manager:{{ wazuh_version }}"
+    indexer_image: "wazuh/wazuh-indexer:{{ wazuh_version }}"
+    dashboard_image: "wazuh/wazuh-dashboard:{{ wazuh_version }}"
+
+  pre_tasks:
+    - name: Verify Docker Swarm is initialized
+      command: docker node ls
+      register: swarm_status
+      failed_when: swarm_status.rc != 0
+      changed_when: false
+
+    - name: Verify required secrets are available
+      fail:
+        msg: "Required secret {{ item }} is not defined"
+      when: vars[item] is not defined or vars[item] == ""
+      loop:
+        - wazuh_api_password
+        - indexer_password
+
+  tasks:
+    - name: Create Wazuh configuration directory
+      file:
+        path: "{{ wazuh_config_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Copy configuration files to target
+      synchronize:
+        src: "{{ item.src }}"
+        dest: "{{ wazuh_config_dir }}/{{ item.dest }}"
+        delete: yes
+        recursive: yes
+      delegate_to: localhost
+      loop:
+        - { src: "../config/", dest: "config/" }
+        - { src: "../wazuh-swarm.yaml", dest: "wazuh-swarm.yaml" }
+        - { src: "../setup-secrets.sh", dest: "setup-secrets.sh" }
+
+    - name: Set proper permissions on configuration files
+      file:
+        path: "{{ wazuh_config_dir }}/config"
+        state: directory
+        recurse: yes
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Set certificate file permissions
+      file:
+        path: "{{ wazuh_config_dir }}/config/wazuh_indexer_ssl_certs"
+        state: directory
+        recurse: yes
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Update stack file with official images (no changes needed)
+      debug:
+        msg: "Using official Wazuh images: {{ manager_image }}, {{ indexer_image }}, {{ dashboard_image }}"
+
+    - name: Use existing setup script for certificate secrets
+      shell: |
+        cd {{ wazuh_config_dir }}
+        chmod +x setup-secrets.sh
+        ./setup-secrets.sh
+      register: secrets_result
+
+    - name: Remove existing Wazuh stack
+      shell: docker stack rm wazuh
+      ignore_errors: yes
+
+    - name: Wait for stack removal
+      pause:
+        seconds: 15
+
+    - name: Deploy Wazuh Docker Stack
+      shell: |
+        cd {{ wazuh_config_dir }}
+        docker stack deploy -c wazuh-swarm.yaml wazuh
+      register: deploy_result
+
+    - name: Wait for services to start
+      shell: |
+        timeout 300 bash -c 'while [[ "$(docker service ls --filter name=wazuh --format "{{.REPLICAS}}" | grep -c "0/")" -gt 0 ]]; do sleep 5; echo "Waiting for services..."; done'
+      register: service_wait_result
+      failed_when: service_wait_result.rc != 0
+
+    - name: Display service status
+      shell: docker service ls --filter name=wazuh
+      register: service_status
+
+    - debug:
+        msg: "{{ service_status.stdout_lines }}"
+
+    - name: Wait for indexer to be fully ready
+      shell: |
+        docker exec $(docker ps -q -f name=wazuh_wazuh-indexer) curl -k -s https://localhost:9200/_cluster/health | jq -r '.status'
+      register: indexer_health
+      until: indexer_health.stdout in ["green", "yellow"]
+      retries: 30
+      delay: 10
+      ignore_errors: yes
+
+    - name: Initialize indexer security
+      shell: |
+        docker exec $(docker ps -q -f name=wazuh_wazuh-indexer) \
+          /usr/share/wazuh-indexer/bin/indexer-security-init.sh
+      register: security_init_result
+      ignore_errors: yes
+
+    - name: Verify Wazuh Dashboard accessibility
+      uri:
+        url: "https://{{ ansible_host }}:443"
+        method: GET
+        validate_certs: no
+        status_code: [200, 302]
+        timeout: 30
+      register: dashboard_check
+      retries: 10
+      delay: 15
+
+    - name: Run post-deployment health checks
+      shell: |
+        echo "=== Service Status ==="
+        docker service ls --filter name=wazuh
+        echo ""
+        echo "=== Indexer Health ==="
+        docker exec $(docker ps -q -f name=wazuh_wazuh-indexer) \
+          curl -k -s -u admin:{{ indexer_password }} https://localhost:9200/_cluster/health | jq '.'
+        echo ""
+        echo "=== Manager API Status ==="
+        curl -k -s -u wazuh-wui:{{ wazuh_api_password }} https://{{ ansible_host }}:55000/ | jq '.' || echo "API not ready yet"
+      register: health_check_result
+      ignore_errors: yes
+
+    - debug:
+        msg: "{{ health_check_result.stdout_lines }}"
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+  post_tasks:
+    - name: Cleanup temporary files
+      file:
+        path: "{{ wazuh_config_dir }}/wazuh-swarm.yml.bak"
+        state: absent
+
+    - name: Display deployment summary
+      debug:
+        msg: |
+          Wazuh Deployment Summary:
+          - Manager Image: {{ manager_image }}
+          - Indexer Image: {{ indexer_image }}
+          - Dashboard Image: {{ dashboard_image }}
+          - Dashboard URL: https://{{ ansible_host }}:443
+          - Manager API: https://{{ ansible_host }}:55000
+          - Indexer API: https://{{ ansible_host }}:9200
