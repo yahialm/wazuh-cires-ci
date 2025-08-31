@@ -44,7 +44,7 @@ jobs:
 
       - name: Validate Docker Compose syntax
         run: |
-          docker-compose -f wazuh-swarm.yaml config > /dev/null
+          docker compose -f wazuh-swarm.yaml config > /dev/null
           echo "Docker Compose file syntax is valid"
 
   deploy:
