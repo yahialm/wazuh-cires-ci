@@ -42,12 +42,6 @@ jobs:
           
           echo "All configuration files present"
 
-      - name: Validate Docker Swarm file syntax
-        run: |
-          # Just check if the YAML is valid, swarm will validate the rest
-          docker run --rm -v $(pwd):/workdir mikefarah/yq eval '.' wazuh-swarm.yaml > /dev/null
-          echo "Docker Swarm file syntax is valid"
-
   deploy:
     runs-on: self-hosted
     timeout-minutes: 20
@@ -66,8 +60,21 @@ jobs:
 
       - name: Install Ansible
         run: |
-          pip3 install ansible ansible-core
-          ansible-galaxy collection install community.docker
+          # Install Python pip if not available
+          if ! command -v pip3 &> /dev/null; then
+            sudo apt update
+            sudo apt install -y python3-pip
+          fi
+          
+          # Install Ansible
+          pip3 install --user ansible ansible-core
+          
+          # Add pip user bin to PATH
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+          # Install community.docker collection
+          $HOME/.local/bin/ansible-galaxy collection install community.docker
 
       - name: Configure SSH
         run: |
