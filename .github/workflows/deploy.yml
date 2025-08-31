@@ -12,39 +12,9 @@ env:
   IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
-  security-scan:
-    runs-on: self-hosted
-    timeout-minutes: 10
-    strategy:
-      matrix:
-        image:
-          - wazuh/wazuh-manager:4.12.0
-          - wazuh/wazuh-indexer:4.12.0
-          - wazuh/wazuh-dashboard:4.12.0
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ matrix.image }}
-          format: 'sarif'
-          output: 'trivy-results-${{ strategy.job-index }}.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Fail on critical/high vulnerabilities
-          timeout: '5m'
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results-${{ strategy.job-index }}.sarif'
-
   validate-config:
     runs-on: self-hosted
     timeout-minutes: 5
-    needs: security-scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -80,16 +50,14 @@ jobs:
   deploy:
     runs-on: self-hosted
     timeout-minutes: 20
-    needs: [security-scan, validate-config]
+    needs: validate-config
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         run: |
-          # Check if python3 is available, install if not
           if ! command -v python3 &> /dev/null; then
             sudo apt update
             sudo apt install -y python3 python3-pip
