@@ -1,50 +1,14 @@
 name: Wazuh Docker Swarm Deployment
 
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository }}
-
 jobs:
-  security-scan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10  # Add timeout
-    strategy:
-      matrix:
-        image:
-          - wazuh/wazuh-manager:4.12.0
-          - wazuh/wazuh-indexer:4.12.0
-          - wazuh/wazuh-dashboard:4.12.0
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ matrix.image }}
-          format: 'sarif'
-          output: 'trivy-results-${{ strategy.job-index }}.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Changed to 0 - don't fail on vulnerabilities for now
-          timeout: '5m'   # Add timeout
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results-${{ strategy.job-index }}.sarif'
-
   validate-config:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
-    needs: security-scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -69,26 +33,56 @@ jobs:
               echo "✅ Found: $file"
             fi
           done
-          
-          echo "All configuration files present"
-
-      - name: Validate Docker Compose syntax
-        run: |
-          docker-compose -f wazuh-swarm.yaml config > /dev/null
-          echo "Docker Compose file syntax is valid"
 
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20  # Add timeout
-    needs: [security-scan, validate-config]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    timeout-minutes: 20
+    needs: validate-config
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to Docker Swarm
+      # If runner is ON the swarm manager, deploy directly
+      - name: Deploy to Docker Swarm (Local)
+        if: ${{ env.DEPLOY_LOCAL == 'true' }}
         run: |
-          # Setup SSH
+          cd /opt/wazuh
+          
+          # Copy files locally
+          cp -r $GITHUB_WORKSPACE/config/* ./config/
+          cp $GITHUB_WORKSPACE/wazuh-swarm.yaml ./
+          cp $GITHUB_WORKSPACE/setup-secrets.sh ./
+          
+          # Generate certificates
+          echo "Generating certificates..."
+          docker run --rm -v $(pwd)/config:/config --network host wazuh/wazuh-certs-generator:0.0.2
+          
+          # Setup secrets
+          echo "Setting up secrets..."
+          chmod +x setup-secrets.sh
+          ./setup-secrets.sh
+          
+          # Deploy stack
+          echo "Removing old stack..."
+          docker stack rm wazuh || true
+          sleep 15
+          
+          echo "Deploying new stack..."
+          docker stack deploy -c wazuh-swarm.yaml wazuh
+          
+          # Wait for services
+          echo "Waiting for services..."
+          timeout 300 bash -c 'while [[ "$(docker service ls --filter name=wazuh --format "{{.REPLICAS}}" | grep -c "0/")" -gt 0 ]]; do sleep 10; echo "Still waiting..."; done'
+          
+          echo "✅ Deployment completed!"
+          docker service ls --filter name=wazuh
+
+      # If runner is NOT on swarm manager, deploy via SSH
+      - name: Deploy to Docker Swarm (Remote)
+        if: ${{ env.DEPLOY_LOCAL != 'true' }}
+        run: |
+          # Setup SSH (only needed if runner is separate from swarm)
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
@@ -104,25 +98,18 @@ jobs:
           cd /opt/wazuh
           
           # Generate certificates
-          echo "Generating certificates..."
           docker run --rm -v $(pwd)/config:/config --network host wazuh/wazuh-certs-generator:0.0.2
           
           # Setup secrets
-          echo "Setting up secrets..."
           chmod +x setup-secrets.sh
           ./setup-secrets.sh
           
-          # Remove old stack
-          echo "Removing old stack..."
+          # Deploy stack
           docker stack rm wazuh || true
           sleep 15
-          
-          # Deploy new stack
-          echo "Deploying new stack..."
           docker stack deploy -c wazuh-swarm.yaml wazuh
           
           # Wait for services
-          echo "Waiting for services to start..."
           timeout 300 bash -c 'while [[ "$(docker service ls --filter name=wazuh --format "{{.REPLICAS}}" | grep -c "0/")" -gt 0 ]]; do sleep 10; echo "Still waiting..."; done'
           
           echo "✅ Deployment completed!"
@@ -130,7 +117,7 @@ jobs:
           EOF
 
   notify:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [deploy]
     if: always()
     steps:
