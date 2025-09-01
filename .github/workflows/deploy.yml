@@ -45,6 +45,9 @@ jobs:
 
   security-scan:
     runs-on: self-hosted
+    permissions:
+      contents: read
+      security-events: write
     timeout-minutes: 15
     needs: validate-config
     strategy:
