@@ -260,8 +260,8 @@ jobs:
                   validate_certs: no
                   timeout: 30
                 register: dashboard_check
-                retries: 5
-                delay: 10
+                retries: 30
+                delay: 15
           EOF
           
           ansible-playbook -i inventory.yml deploy-playbook.yml
