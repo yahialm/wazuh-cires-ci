@@ -125,15 +125,12 @@ jobs:
               
             tasks:
               - name: Copy configuration files
-                synchronize:
-                  src: "{{ item.src }}"
-                  dest: "{{ item.dest }}"
-                  delete: yes
-                  recursive: yes
-                loop:
-                  - { src: "config/", dest: "/opt/wazuh/config/" }
-                  - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
-                  - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh" }
+                shell: |
+                  # Copy config files directly to avoid double nesting
+                  cp -r config/* /opt/wazuh/config/
+                  cp wazuh-swarm.yaml /opt/wazuh/wazuh-swarm.yaml
+                  cp setup-secrets.sh /opt/wazuh/setup-secrets.sh
+                  chmod +x /opt/wazuh/setup-secrets.sh
 
               - name: Debug config directory
                 shell: |
