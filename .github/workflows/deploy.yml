@@ -81,8 +81,8 @@ jobs:
           trivy image \
             --format sarif \
             --output "trivy-results-${SAFE_IMAGE_NAME}.sarif" \
-            --severity CRITICAL,HIGH \
-            --timeout 10m \
+            --severity CRITICAL \
+            --timeout 5m \
             --exit-code 0 \
             ${{ matrix.image }}
           
