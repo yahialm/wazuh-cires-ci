@@ -6,6 +6,8 @@ Automated deployment pipeline for Wazuh SIEM on Docker Swarm with integrated sec
 
 ## Overview
 
+![Pipeline Success](docs/images/architecture.png)
+
 This project implements a CI/CD pipeline for deploying Wazuh SIEM to a Docker Swarm cluster using GitHub Actions, Ansible, and Trivy security scanning. The pipeline ensures secure deployments by scanning Docker images for vulnerabilities before deployment.
 
 ## Repository Structure
