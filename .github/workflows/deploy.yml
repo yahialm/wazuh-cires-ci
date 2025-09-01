@@ -119,8 +119,6 @@ jobs:
           - name: Deploy Wazuh to Docker Swarm
             hosts: swarm-manager
             become: yes
-            become_method: sudo
-            ansible_become_password: ${{ secrets.SUDO_PASSWORD }}
             vars:
               wazuh_api_password: ${{ secrets.WAZUH_API_PASSWORD }}
               indexer_password: ${{ secrets.INDEXER_PASSWORD }}
