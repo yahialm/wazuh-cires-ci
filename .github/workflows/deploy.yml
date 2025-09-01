@@ -29,6 +29,7 @@ jobs:
             "config/wazuh_dashboard/opensearch_dashboards.yml"
             "config/wazuh_dashboard/wazuh.yml"
             "wazuh-swarm.yaml"
+            "generate-indexer-certs.yml"
           )
           
           for file in "${required_files[@]}"; do
@@ -126,47 +127,17 @@ jobs:
             tasks:
               - name: Copy configuration files
                 shell: |
-                  # Copy config files directly to avoid double nesting
+                  # Copy all files to deployment directory
                   cp -r config/* /opt/wazuh/config/
                   cp wazuh-swarm.yaml /opt/wazuh/wazuh-swarm.yaml
                   cp setup-secrets.sh /opt/wazuh/setup-secrets.sh
+                  cp generate-indexer-certs.yml /opt/wazuh/generate-indexer-certs.yml
                   chmod +x /opt/wazuh/setup-secrets.sh
 
-              - name: Debug config directory
-                shell: |
-                  echo "Contents of /opt/wazuh:"
-                  ls -la /opt/wazuh/
-                  echo ""
-                  echo "Contents of /opt/wazuh/config:"
-                  ls -la /opt/wazuh/config/
-                  echo ""
-                  echo "Looking for certs.yml:"
-                  find /opt/wazuh -name "certs.yml" -type f
-                register: debug_output
-
-              - name: Show debug output
-                debug:
-                  msg: "{{ debug_output.stdout_lines }}"
-
-              - name: Fix config permissions
-                shell: |
-                  sudo chown -R $USER:$USER /opt/wazuh/config/
-                  sudo chmod -R 644 /opt/wazuh/config/
-                  sudo chmod 755 /opt/wazuh/config/
-
-              - name: Create certificates directory
-                shell: |
-                  mkdir -p /opt/wazuh/config/wazuh_indexer_ssl_certs
-                  # Create symlink that the generator expects
-                  cd /opt/wazuh/config
-                  ln -sf wazuh_indexer_ssl_certs certificates
-
-              - name: Generate certificates
+              - name: Generate certificates using your method
                 shell: |
                   cd /opt/wazuh
-                  docker run --rm -v $(pwd)/config:/config \
-                    --network host \
-                    wazuh/wazuh-certs-generator:0.0.2
+                  docker compose -f generate-indexer-certs.yml run --rm generator
 
               - name: Create Docker secrets from certificates
                 shell: |
