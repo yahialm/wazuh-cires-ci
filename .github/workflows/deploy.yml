@@ -157,7 +157,9 @@ jobs:
               - name: Create certificates directory
                 shell: |
                   mkdir -p /opt/wazuh/config/wazuh_indexer_ssl_certs
-                  chmod 755 /opt/wazuh/config/wazuh_indexer_ssl_certs
+                  # Create symlink that the generator expects
+                  cd /opt/wazuh/config
+                  ln -sf wazuh_indexer_ssl_certs certificates
 
               - name: Generate certificates
                 shell: |
