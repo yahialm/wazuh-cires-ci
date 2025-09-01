@@ -78,10 +78,28 @@ jobs:
 
       - name: Configure SSH
         run: |
+          # Check if required secrets are set
+          if [ -z "${{ secrets.SWARM_MANAGER_HOST }}" ]; then
+            echo "❌ SWARM_MANAGER_HOST secret is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.SWARM_MANAGER_USER }}" ]; then
+            echo "❌ SWARM_MANAGER_USER secret is not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+            echo "❌ SSH_PRIVATE_KEY secret is not set"
+            exit 1
+          fi
+          
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SWARM_MANAGER_HOST }} >> ~/.ssh/known_hosts
+          
+          echo "✅ SSH configured for ${{ secrets.SWARM_MANAGER_HOST }}"
 
       - name: Deploy with Ansible
         env:
@@ -101,6 +119,8 @@ jobs:
           - name: Deploy Wazuh to Docker Swarm
             hosts: swarm-manager
             become: yes
+            become_method: sudo
+            ansible_become_password: ${{ secrets.SUDO_PASSWORD }}
             vars:
               wazuh_api_password: ${{ secrets.WAZUH_API_PASSWORD }}
               indexer_password: ${{ secrets.INDEXER_PASSWORD }}
@@ -112,7 +132,7 @@ jobs:
                   dest: "{{ item.dest }}"
                   mode: '0644'
                 loop:
-                  - { src: "config/", dest: "/opt/wazuh/" }
+                  - { src: "config", dest: "/opt/wazuh/config" }
                   - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
                   - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh" }
 
