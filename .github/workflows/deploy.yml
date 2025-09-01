@@ -212,7 +212,7 @@ jobs:
                 delay: 10
           EOF
           
-          ansible-playbook -i inventory.yml deploy-playbook.yml --become-password-file <(echo '${{ secrets.SUDO_PASSWORD }}')
+          ansible-playbook -i inventory.yml deploy-playbook.yml
 
   notify:
     runs-on: self-hosted
