@@ -157,6 +157,11 @@ jobs:
                   sudo chmod -R 644 /opt/wazuh/config/
                   sudo chmod 755 /opt/wazuh/config/
 
+              - name: Create certificates directory
+                shell: |
+                  mkdir -p /opt/wazuh/config/wazuh_indexer_ssl_certs
+                  chmod 755 /opt/wazuh/config/wazuh_indexer_ssl_certs
+
               - name: Generate certificates
                 shell: |
                   cd /opt/wazuh
