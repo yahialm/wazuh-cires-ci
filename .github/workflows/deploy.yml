@@ -183,17 +183,11 @@ jobs:
                   docker stack deploy -c wazuh-swarm.yaml wazuh
 
               - name: Wait for services to be ready
-                shell: docker service ls --filter name=wazuh --format "table {{'{{'}}.NAME{{'}}'}}\t{{'{{'}}.REPLICAS{{'}}'}}"
+                shell: docker service ls --filter name=wazuh
                 register: service_status
-                until: "'0/' not in service_status.stdout"
+                until: service_status.stdout_lines | length > 0
                 retries: 30
                 delay: 10
-
-              - name: Initialize indexer security
-                shell: |
-                  sleep 30
-                  docker exec $(docker ps -q -f name=wazuh_wazuh-indexer) \
-                    /usr/share/wazuh-indexer/bin/indexer-security-init.sh || true
 
               - name: Verify deployment
                 uri:
