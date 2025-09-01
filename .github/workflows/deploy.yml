@@ -126,13 +126,20 @@ jobs:
               
             tasks:
               - name: Copy configuration files
-                shell: |
-                  # Copy all files to deployment directory
-                  cp -r config/* /opt/wazuh/config/
-                  cp wazuh-swarm.yaml /opt/wazuh/wazuh-swarm.yaml
-                  cp setup-secrets.sh /opt/wazuh/setup-secrets.sh
-                  cp generate-indexer-certs.yml /opt/wazuh/generate-indexer-certs.yml
-                  chmod +x /opt/wazuh/setup-secrets.sh
+                copy:
+                  src: "{{ item.src }}"
+                  dest: "{{ item.dest }}"
+                  mode: '0644'
+                loop:
+                  - { src: "generate-indexer-certs.yml", dest: "/opt/wazuh/generate-indexer-certs.yml" }
+                  - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
+                  - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh", mode: '0755' }
+
+              - name: Copy config directory
+                copy:
+                  src: "config/"
+                  dest: "/opt/wazuh/config/"
+                  mode: '0644'
 
               - name: Generate certificates using your method
                 shell: |
