@@ -134,6 +134,17 @@ jobs:
                   - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
                   - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh" }
 
+              - name: Debug config directory
+                shell: |
+                  echo "Contents of /opt/wazuh:"
+                  ls -la /opt/wazuh/
+                  echo ""
+                  echo "Contents of /opt/wazuh/config:"
+                  ls -la /opt/wazuh/config/
+                  echo ""
+                  echo "Looking for certs.yml:"
+                  find /opt/wazuh -name "certs.yml" -type f
+
               - name: Generate certificates
                 shell: |
                   cd /opt/wazuh
@@ -201,7 +212,7 @@ jobs:
                 delay: 10
           EOF
           
-          ansible-playbook -i inventory.yml deploy-playbook.yml
+          ansible-playbook -i inventory.yml deploy-playbook.yml --become-password-file <(echo '${{ secrets.SUDO_PASSWORD }}')
 
   notify:
     runs-on: self-hosted
