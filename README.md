@@ -4,7 +4,7 @@ This project implements an automated deployment pipeline for Wazuh SIEM on Docke
 
 ## Architecture Overview
 
-![Wazuh Architecture](docs/images/pipeline-check)
+![Wazuh Architecture](docs/images/pipeline-check.png)
 
 The solution consists of:
 - **3-node Docker Swarm cluster** (Manager, Indexer, Dashboard)
@@ -374,4 +374,5 @@ deploy-production:
 - YAML files: 2-space indentation
 - Shell scripts: Follow shellcheck recommendations  
 - Python tests: Follow PEP 8 style guidelines
+
 
