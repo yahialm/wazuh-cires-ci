@@ -183,7 +183,7 @@ jobs:
                   docker stack deploy -c wazuh-swarm.yaml wazuh
 
               - name: Wait for services to be ready
-                shell: docker service ls --filter name=wazuh --format "table {{.NAME}}\t{{.REPLICAS}}"
+                shell: docker service ls --filter name=wazuh --format "table {{'{{'}}.NAME{{'}}'}}\t{{'{{'}}.REPLICAS{{'}}'}}"
                 register: service_status
                 until: "'0/' not in service_status.stdout"
                 retries: 30
