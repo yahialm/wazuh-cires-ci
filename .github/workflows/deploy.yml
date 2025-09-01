@@ -43,10 +43,73 @@ jobs:
           
           echo "All configuration files present"
 
+  security-scan:
+    runs-on: self-hosted
+    timeout-minutes: 15
+    needs: validate-config
+    strategy:
+      matrix:
+        image:
+          - wazuh/wazuh-manager:4.12.0
+          - wazuh/wazuh-indexer:4.12.0
+          - wazuh/wazuh-dashboard:4.12.0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          if ! command -v trivy &> /dev/null; then
+            echo "Installing Trivy..."
+            sudo apt-get update
+            sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install trivy -y
+          else
+            echo "Trivy already installed"
+          fi
+
+      - name: Create safe filename for image
+        run: |
+          # Convert image name to safe filename
+          SAFE_NAME=$(echo "${{ matrix.image }}" | sed 's/[\/:]/_/g')
+          echo "SAFE_IMAGE_NAME=${SAFE_NAME}" >> $GITHUB_ENV
+
+      - name: Run Trivy vulnerability scanner
+        run: |
+          echo "Scanning ${{ matrix.image }}..."
+          trivy image \
+            --format sarif \
+            --output "trivy-results-${SAFE_IMAGE_NAME}.sarif" \
+            --severity CRITICAL,HIGH \
+            --timeout 10m \
+            --exit-code 1 \
+            ${{ matrix.image }}
+          
+          echo "Security scan passed for ${{ matrix.image }}"
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results-${{ env.SAFE_IMAGE_NAME }}.sarif"
+
+      - name: Display scan summary
+        if: always()
+        run: |
+          echo "Security scan completed for ${{ matrix.image }}"
+          if [ -f "trivy-results-${SAFE_IMAGE_NAME}.sarif" ]; then
+            echo "Results uploaded to GitHub Security tab"
+          else
+            echo "No results file generated"
+          fi
+
   deploy:
     runs-on: self-hosted
     timeout-minutes: 20
-    needs: validate-config
+    needs: [validate-config, security-scan]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Checkout code
@@ -204,14 +267,31 @@ jobs:
 
   notify:
     runs-on: self-hosted
-    needs: [deploy]
+    needs: [deploy, security-scan]
     if: always()
     steps:
-      - name: Notify deployment status
+      - name: Notify deployment and security scan status
         run: |
+          echo "=== Security Scan Status ==="
+          if [ "${{ needs.security-scan.result }}" == "success" ]; then
+            echo "✅ All security scans passed - no critical/high vulnerabilities found"
+            echo "📊 Detailed reports available in GitHub Security tab"
+          else
+            echo "❌ Security scans failed - critical/high vulnerabilities detected"
+            echo "🚫 Deployment was blocked for security reasons"
+          fi
+          
+          echo ""
+          echo "=== Deployment Status ==="
           if [ "${{ needs.deploy.result }}" == "success" ]; then
             echo "✅ Wazuh deployment successful"
+          elif [ "${{ needs.deploy.result }}" == "skipped" ]; then
+            echo "⏭️ Deployment skipped due to security scan failure"
           else
             echo "❌ Wazuh deployment failed"
+          fi
+          
+          # Fail if either security scan or deployment failed
+          if [ "${{ needs.security-scan.result }}" != "success" ] || [ "${{ needs.deploy.result }}" != "success" ]; then
             exit 1
           fi
