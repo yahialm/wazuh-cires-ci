@@ -2,7 +2,7 @@
 
 This project implements an automated deployment pipeline for Wazuh SIEM on Docker Swarm with integrated security scanning and validation testing.
 
-## Architecture Overview
+## Overview
 
 ![Wazuh Architecture](docs/images/pipeline-check.png)
 
@@ -374,5 +374,6 @@ deploy-production:
 - YAML files: 2-space indentation
 - Shell scripts: Follow shellcheck recommendations  
 - Python tests: Follow PEP 8 style guidelines
+
 
 
