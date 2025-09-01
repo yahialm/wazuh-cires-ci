@@ -125,12 +125,13 @@ jobs:
               
             tasks:
               - name: Copy configuration files
-                copy:
+                synchronize:
                   src: "{{ item.src }}"
                   dest: "{{ item.dest }}"
-                  mode: '0644'
+                  delete: yes
+                  recursive: yes
                 loop:
-                  - { src: "config", dest: "/opt/wazuh/config" }
+                  - { src: "config/", dest: "/opt/wazuh/config/" }
                   - { src: "wazuh-swarm.yaml", dest: "/opt/wazuh/wazuh-swarm.yaml" }
                   - { src: "setup-secrets.sh", dest: "/opt/wazuh/setup-secrets.sh" }
 
