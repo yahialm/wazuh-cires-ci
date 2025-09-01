@@ -144,6 +144,11 @@ jobs:
                   echo ""
                   echo "Looking for certs.yml:"
                   find /opt/wazuh -name "certs.yml" -type f
+                register: debug_output
+
+              - name: Show debug output
+                debug:
+                  msg: "{{ debug_output.stdout_lines }}"
 
               - name: Fix config permissions
                 shell: |
