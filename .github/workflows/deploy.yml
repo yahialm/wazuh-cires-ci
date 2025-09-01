@@ -145,6 +145,12 @@ jobs:
                   echo "Looking for certs.yml:"
                   find /opt/wazuh -name "certs.yml" -type f
 
+              - name: Fix config permissions
+                shell: |
+                  sudo chown -R $USER:$USER /opt/wazuh/config/
+                  sudo chmod -R 644 /opt/wazuh/config/
+                  sudo chmod 755 /opt/wazuh/config/
+
               - name: Generate certificates
                 shell: |
                   cd /opt/wazuh
